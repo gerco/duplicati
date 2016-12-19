@@ -633,7 +633,7 @@ namespace Duplicati.Library.Main.Operation
 
                 using(var testdb = new LocalTestDatabase(m_database))
                 using(var backend = new BackendManager(m_backendurl, m_options, m_result.BackendWriter, testdb))
-                    new TestHandler(m_backendurl, m_options, new TestResults(m_result))
+                    new TestHandler(m_backendurl, m_options, (TestResults)m_result.TestResults)
                         .DoRun(m_options.BackupTestSampleCount, testdb, backend);
             }
         }
@@ -685,7 +685,7 @@ namespace Duplicati.Library.Main.Operation
                     throw new Exception("The database was attempted repaired, but the repair did not complete. This database may be incomplete and the backup process cannot continue. You may delete the local database and attempt to repair it again.");
 
                 m_blocksize = m_options.Blocksize;
-                m_maxmetadatasize = (m_blocksize / m_options.BlockhashSize) * m_blocksize;
+                m_maxmetadatasize = (m_blocksize / (long)m_options.BlockhashSize) * m_blocksize;
 
                 m_blockbuffer = new byte[m_options.Blocksize * Math.Max(1, m_options.FileReadBufferSize / m_options.Blocksize)];
                 m_blocklistbuffer = new byte[m_options.Blocksize];
@@ -835,7 +835,7 @@ namespace Duplicati.Library.Main.Operation
 
                 if (m_options.StoreMetadata)
                 {
-                    metadata = snapshot.GetMetadata(path);
+                    metadata = snapshot.GetMetadata(path, attributes.HasFlag(System.IO.FileAttributes.ReparsePoint), m_symlinkPolicy == Options.SymlinkStrategy.Follow);
                     if (metadata == null)
                         metadata = new Dictionary<string, string>();
 
@@ -1046,13 +1046,17 @@ namespace Duplicati.Library.Main.Operation
                 }
                 else
                 {
-                    if (m_options.SkipFilesLargerThan == long.MaxValue || m_options.SkipFilesLargerThan == 0 || snapshot.GetFileSize(path) < m_options.SkipFilesLargerThan)                
-                        m_result.AddVerboseMessage("Skipped checking file, because timestamp was not updated {0}", path);
+                    if (tooLargeFile)                
+                        m_result.AddVerboseMessage("Excluding file because the size {0} exceeds limit ({1}): {2}", Library.Utility.Utility.FormatSizeString(filestatsize), Library.Utility.Utility.FormatSizeString(m_options.SkipFilesLargerThan), path);
                     else
-                        m_result.AddVerboseMessage("Skipped checking file, because the size exceeds limit {0}", path);
+                        m_result.AddVerboseMessage("Skipped checking file, because timestamp was not updated {0}", path);
                 }
 
-                if (!changed)
+                // If the file was not previously found, we cannot add it
+                // If the file was too large, we treat it as missing,
+                // otherwise the backups appear to contain the file
+                // but has an old version
+                if (!changed && oldId >= 0 && !tooLargeFile)
                     AddUnmodifiedFile(oldId, lastwrite);
 
                 m_result.SizeOfExaminedFiles += filestatsize;
@@ -1335,7 +1339,8 @@ namespace Duplicati.Library.Main.Operation
                 finally { m_indexvolume = null; }
             }
 
-            m_result.EndTime = DateTime.UtcNow;
+            if (m_result.EndTime.Ticks == 0)
+                m_result.EndTime = DateTime.UtcNow;
         }
     }
 }
