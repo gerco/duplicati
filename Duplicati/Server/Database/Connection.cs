@@ -403,7 +403,7 @@ namespace Duplicati.Server.Database
                         try
                         {
                             var ds = Library.Utility.Sizeparser.ParseSize(s.Value);
-                            if (ds <= 1024*1024)
+                            if (ds < 1024 * 1024)
                                 return "DBlock size must be at least 1MB";
                         }
                         catch
@@ -411,18 +411,23 @@ namespace Duplicati.Server.Database
                             return "DBlock value must be a valid size string";
                         }
                     }
-                    else if (string.Equals(s.Name, "blocksize", StringComparison.InvariantCultureIgnoreCase))
+                    else if (string.Equals(s.Name, "--blocksize", StringComparison.InvariantCultureIgnoreCase))
                     {
                         try
                         {
                             var ds = Library.Utility.Sizeparser.ParseSize(s.Value);
-                            if (ds <= 1024 || ds > int.MaxValue)
+                            if (ds < 1024 || ds > int.MaxValue)
                                 return "The blocksize must be at least 1KB";
                         }
                         catch
                         {
                             return "The blocksize value must be a valid size string";
                         }
+                    }
+                    else if (string.Equals(s.Name, "--prefix", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        if (!string.IsNullOrWhiteSpace(s.Value) && s.Value.Contains("-"))
+                            return "The prefix cannot contain hyphens (-)";
                     }
             }
 
@@ -475,7 +480,7 @@ namespace Duplicati.Server.Database
                 bool update = item.ID != null;
                 if (!update && item.DBPath == null)
                 {
-                    var folder = Program.DATAFOLDER;
+                    var folder = Program.DataFolder;
                     if (!System.IO.Directory.Exists(folder))
                         System.IO.Directory.CreateDirectory(folder);
                     
@@ -830,7 +835,8 @@ namespace Duplicati.Server.Database
                     ),
                     @"SELECT ""Key"", ""Value"" FROM ""UIStorage"" WHERE ""Scheme"" = ?", 
                     scheme)
-                    .ToDictionary(x => x.Key, x => x.Value);
+                    .GroupBy(x => x.Key)
+                    .ToDictionary(x => x.Key, x => x.Last().Value);
         }
         
         public void SetUISettings(string scheme, IDictionary<string, string> values, System.Data.IDbTransaction transaction = null)
@@ -852,6 +858,27 @@ namespace Duplicati.Server.Database
                         tr.Commit();
                 }
         }
+
+		public void UpdateUISettings(string scheme, IDictionary<string, string> values, System.Data.IDbTransaction transaction = null)
+		{
+			lock (m_lock)
+				using (var tr = transaction == null ? m_connection.BeginTransaction() : null)
+				{
+					OverwriteAndUpdateDb(
+						tr,
+                        @"DELETE FROM ""UIStorage"" WHERE ""Scheme"" = ? AND ""Key"" IN (?)", new object[] { scheme, values.Keys },
+                        values.Where(x => x.Value != null),
+						@"INSERT INTO ""UIStorage"" (""Scheme"", ""Key"", ""Value"") VALUES (?, ?, ?)",
+						(f) =>
+						{
+							return new object[] { scheme, f.Key ?? "", f.Value ?? "" };
+						}
+					);
+
+					if (tr != null)
+						tr.Commit();
+				}
+		}
 
         public TempFile[] GetTempFiles()
         {

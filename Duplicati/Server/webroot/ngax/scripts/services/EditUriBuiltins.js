@@ -23,6 +23,7 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
     EditUriBackendConfig.templates['gcs']         = 'templates/backends/gcs.html';
     EditUriBackendConfig.templates['b2']          = 'templates/backends/b2.html';
     EditUriBackendConfig.templates['mega']        = 'templates/backends/mega.html';
+    EditUriBackendConfig.templates['jottacloud']  = 'templates/backends/jottacloud.html';
     EditUriBackendConfig.templates['box']         = 'templates/backends/oauth.html';
     EditUriBackendConfig.templates['dropbox']     = 'templates/backends/oauth.html';
 
@@ -355,6 +356,10 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
         EditUriBackendConfig.mergeServerAndPath(scope);
     };
 
+    EditUriBackendConfig.parsers['jottacloud'] = function(scope, module, server, port, path, options) {
+        EditUriBackendConfig.mergeServerAndPath(scope);
+    };
+
     // Builders take the scope and produce the uri output
     EditUriBackendConfig.builders['s3'] = function(scope) {
         var opts = {
@@ -519,6 +524,23 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
         return url;
     };
 
+    EditUriBackendConfig.builders['jottacloud'] = function(scope) {
+        var opts = { };
+
+        EditUriBackendConfig.merge_in_advanced_options(scope, opts);
+
+        // Slightly better error message
+        scope.Folder = scope.Path;
+
+        var url = AppUtils.format('{0}://{1}{2}',
+            scope.Backend.Key,
+            scope.Path,
+            AppUtils.encodeDictAsUrl(opts)
+        );
+
+        return url;
+    };
+
     EditUriBackendConfig.validaters['file'] = function(scope, continuation) {
         if (EditUriBackendConfig.require_path(scope))
             continuation();
@@ -564,19 +586,20 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
 
     EditUriBackendConfig.validaters['hubic']       = function(scope, continuation) {
 
-        var prefix = 'HubiC-DeskBackup_Duplicati/';
+        var prefix1 = 'HubiC-DeskBackup_Duplicati/';
+        var prefix2 = 'default/'
 
         EditUriBackendConfig.validaters['onedrive'](scope, function() {
 
             var p = (scope.Path || '').trim();
 
-            if (p.length > 0 && p.indexOf('default/') != 0 && p.indexOf(prefix) != 0) {
-                DialogService.dialog(gettextCatalog.getString('Adjust path name?'), gettextCatalog.getString('The path should start with "{{prefix}}" or "{{def}}", otherwise you will not be able to see the files in the HubiC web interface.\n\nDo you want to add the prefix to the path automatically?', {prefix: prefix, def: 'default' }), [gettextCatalog.getString('Cancel'), gettextCatalog.getString('No'), gettextCatalog.getString('Yes')], function(ix) {
+            if (p.length > 0 && p.indexOf(prefix2) != 0 && p.indexOf(prefix1) != 0) {
+                DialogService.dialog(gettextCatalog.getString('Adjust path name?'), gettextCatalog.getString('The path should start with "{{prefix1}}" or "{{prefix2}}", otherwise you will not be able to see the files in the HubiC web interface.\n\nDo you want to add the prefix to the path automatically?', {prefix1: prefix1, prefix2: prefix2 }), [gettextCatalog.getString('Cancel'), gettextCatalog.getString('No'), gettextCatalog.getString('Yes')], function(ix) {
                     if (ix == 2) {
                         while (p.indexOf('/') == 0)
                             p = p.substr(1);
 
-                        scope.Path = prefix + p;
+                        scope.Path = prefix2 + p;
                     }
                     if (ix == 1 || ix == 2)
                         continuation();
@@ -589,7 +612,6 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
     };
 
     EditUriBackendConfig.validaters['googledrive'] = EditUriBackendConfig.validaters['onedrive'];
-    EditUriBackendConfig.validaters['hubic']       = EditUriBackendConfig.validaters['onedrive'];
     EditUriBackendConfig.validaters['gcs']         = EditUriBackendConfig.validaters['onedrive'];
     EditUriBackendConfig.validaters['amzcd']       = EditUriBackendConfig.validaters['onedrive'];
     EditUriBackendConfig.validaters['box']         = EditUriBackendConfig.validaters['onedrive'];
@@ -688,6 +710,16 @@ backupApp.service('EditUriBuiltins', function(AppService, AppUtils, SystemInfo, 
     };
 
     EditUriBackendConfig.validaters['mega'] = function(scope, continuation) {
+        scope.Path = scope.Path || '';
+        var res =
+            EditUriBackendConfig.require_field(scope, 'Username', gettextCatalog.getString('Username')) &&
+            EditUriBackendConfig.require_field(scope, 'Password', gettextCatalog.getString('Password'));
+
+        if (res)
+            continuation();
+    };
+
+    EditUriBackendConfig.validaters['jottacloud'] = function(scope, continuation) {
         scope.Path = scope.Path || '';
         var res =
             EditUriBackendConfig.require_field(scope, 'Username', gettextCatalog.getString('Username')) &&

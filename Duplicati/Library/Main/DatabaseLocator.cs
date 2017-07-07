@@ -44,8 +44,34 @@ namespace Duplicati.Library.Main
 
             if (!string.IsNullOrEmpty(options.Dbpath))
                 return options.Dbpath;
-         
-            var folder = System.IO.Path.Combine(System.Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Duplicati");
+
+			//Normal mode uses the systems "(Local) Application Data" folder
+			// %LOCALAPPDATA% on Windows, ~/.config on Linux
+
+			// Special handling for Windows:
+			//   - Older versions use %APPDATA%
+			//   - but new versions use %LOCALAPPDATA%
+			//
+			//  If we find a new version, lets use that
+			//    otherwise use the older location
+			//
+
+			var folder = System.IO.Path.Combine(System.Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Duplicati");
+
+			if (Duplicati.Library.Utility.Utility.IsClientWindows)
+			{
+				var newlocation = System.IO.Path.Combine(System.Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Duplicati");
+
+				var prevfile = System.IO.Path.Combine(folder, "dbconfig.json");
+				var curfile = System.IO.Path.Combine(newlocation, "dbconfig.json");
+
+				// If the new file exists, we use that
+				// If the new file does not exist, and the old file exists we use the old
+				// Otherwise we use the new location
+				if (System.IO.File.Exists(curfile) || !System.IO.File.Exists(prevfile))
+					folder = newlocation;
+			}
+
             if (!System.IO.Directory.Exists(folder))
                 System.IO.Directory.CreateDirectory(folder);
                 
@@ -108,7 +134,7 @@ namespace Duplicati.Library.Main
                 select n).ToList();
             
             if (matches.Count > 1)
-                throw new Exception(string.Format("Multiple sources found for: {0}", backend));
+                throw new Duplicati.Library.Interface.UserInformationException(string.Format("Multiple sources found for: {0}", backend));
             
             // Re-select
             if (matches.Count == 0 && anyUsername && string.IsNullOrEmpty(username))
@@ -123,7 +149,7 @@ namespace Duplicati.Library.Main
                     select n).ToList();
                     
                 if (matches.Count > 1)
-                    throw new Exception(String.Format("Multiple sources found for \"{0}\", try supplying --{1}", backend, "auth-username"));
+                    throw new Duplicati.Library.Interface.UserInformationException(String.Format("Multiple sources found for \"{0}\", try supplying --{1}", backend, "auth-username"));
             }
             
             if (matches.Count == 0 && !autoCreate)
@@ -146,7 +172,7 @@ namespace Duplicati.Library.Main
                     newpath = System.IO.Path.Combine(folder, GenerateRandomName());
                 
                 if (System.IO.File.Exists(newpath))
-                    throw new Exception("Unable to find a unique name for the database, please use --dbpath");
+                    throw new Duplicati.Library.Interface.UserInformationException("Unable to find a unique name for the database, please use --dbpath");
                 
                 //Create a new one, add it to the list, and save it
                 configs.Add(new BackendEntry() {

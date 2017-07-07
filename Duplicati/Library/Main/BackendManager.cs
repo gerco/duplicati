@@ -392,7 +392,7 @@ namespace Duplicati.Library.Main
             }
         }
 
-        private BlockingQueue<FileEntryItem> m_queue;
+        private readonly BlockingQueue<FileEntryItem> m_queue;
         private Options m_options;
         private volatile Exception m_lastException;
         private Library.Interface.IEncryption m_encryption;
@@ -402,7 +402,7 @@ namespace Duplicati.Library.Main
         private IBackendWriter m_statwriter;
         private System.Threading.Thread m_thread;
         private BasicResults m_taskControl;
-        private DatabaseCollector m_db;
+        private readonly DatabaseCollector m_db;
                 
         public string BackendUrl { get { return m_backendurl; } }
         
@@ -426,14 +426,14 @@ namespace Duplicati.Library.Main
                 try { shortname = new Library.Utility.Uri(shortname).Scheme; }
                 catch { }
 
-                throw new Exception(string.Format("Backend not supported: {0}", shortname));
+                throw new Duplicati.Library.Interface.UserInformationException(string.Format("Backend not supported: {0}", shortname));
             }
 
             if (!m_options.NoEncryption)
             {
                 m_encryption = DynamicLoader.EncryptionLoader.GetModule(m_options.EncryptionModule, m_options.Passphrase, m_options.RawOptions);
                 if (m_encryption == null)
-                    throw new Exception(string.Format("Encryption method not supported: {0}", m_options.EncryptionModule));
+                    throw new Duplicati.Library.Interface.UserInformationException(string.Format("Encryption method not supported: {0}", m_options.EncryptionModule));
             }
 
             if (m_taskControl != null)
@@ -588,9 +588,18 @@ namespace Duplicati.Library.Main
                                 catch(Exception dex) { m_statwriter.AddWarning(LC.L("Failed to dispose backend instance: {0}", ex.Message), dex); }
     
                                 m_backend = null;
-                                
+
                                 if (retries < m_options.NumberOfRetries && m_options.RetryDelay.Ticks != 0)
-                                    System.Threading.Thread.Sleep(m_options.RetryDelay);
+                                {
+                                    var target = DateTime.Now.AddTicks(m_options.RetryDelay.Ticks);
+                                    while (target > DateTime.Now)
+                                    {
+                                        if (m_taskControl != null && m_taskControl.IsAbortRequested())
+                                            break;
+                                        
+                                        System.Threading.Thread.Sleep(500);
+                                    }
+                                }
                             }
                         }
                         
@@ -690,13 +699,32 @@ namespace Duplicati.Library.Main
                 }
             }
         }
-        
-        private void HandleProgress(long pg)
+
+        private string m_lastThrottleUploadValue = null;
+		private string m_lastThrottleDownloadValue = null;
+
+		private void HandleProgress(ThrottledStream ts, long pg)
         {
             // TODO: Should we pause here as well?
             // It might give annoying timeouts for transfers
             if (m_taskControl != null)
                 m_taskControl.TaskControlRendevouz();
+
+            // Update the throttle speeds if they have changed
+            string tmp;
+            m_options.RawOptions.TryGetValue("throttle-upload", out tmp);
+            if (tmp != m_lastThrottleUploadValue)
+            {
+                ts.WriteSpeed = m_options.MaxUploadPrSecond;
+                m_lastThrottleUploadValue = tmp;
+            }
+
+			m_options.RawOptions.TryGetValue("throttle-download", out tmp);
+            if (tmp != m_lastThrottleDownloadValue)
+            {
+                ts.ReadSpeed = m_options.MaxDownloadPrSecond;
+                m_lastThrottleDownloadValue = tmp;
+            }
 
             m_statwriter.BackendProgressUpdater.UpdateProgress(pg);
         }
@@ -726,7 +754,7 @@ namespace Duplicati.Library.Main
             {
                 using (var fs = System.IO.File.OpenRead(item.LocalFilename))
                 using (var ts = new ThrottledStream(fs, m_options.MaxUploadPrSecond, m_options.MaxDownloadPrSecond))
-                using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, HandleProgress))
+                using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, pg => HandleProgress(ts, pg)))
                     ((Library.Interface.IStreamingBackend)m_backend).Put(item.RemoteFilename, pgs);
             }
             else
@@ -820,7 +848,7 @@ namespace Duplicati.Library.Main
                         using (var ss = new ShaderStream(nextTierWriter, false))
                         {
                             using (var ts = new ThrottledStream(ss, m_options.MaxUploadPrSecond, m_options.MaxDownloadPrSecond))
-                            using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, HandleProgress))
+                            using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, pg => HandleProgress(ts, pg)))
                             {
                                 taskHasher.Start(); // We do not start tasks earlier to be sure the input always gets closed. 
                                 if (taskDecrypter != null) taskDecrypter.Start();
@@ -905,7 +933,7 @@ namespace Duplicati.Library.Main
                     using (var ss = new ShaderStream(hs, true))
                     {
                         using (var ts = new ThrottledStream(ss, m_options.MaxUploadPrSecond, m_options.MaxDownloadPrSecond))
-                        using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, HandleProgress))
+                        using (var pgs = new Library.Utility.ProgressReportingStream(ts, item.Size, pg => HandleProgress(ts, pg)))
                         { ((Library.Interface.IStreamingBackend)m_backend).Get(item.RemoteFilename, pgs); }
                         ss.Flush();
                         retDownloadSize = ss.TotalBytesWritten;
@@ -1165,7 +1193,7 @@ namespace Duplicati.Library.Main
                 throw m_lastException;
         }
 
-        public void Put(VolumeWriterBase item, IndexVolumeWriter indexfile = null)
+        public void Put(VolumeWriterBase item, IndexVolumeWriter indexfile = null, bool synchronous = false)
         {
             if (m_lastException != null)
                 throw m_lastException;
@@ -1201,14 +1229,14 @@ namespace Duplicati.Library.Main
 
             m_db.FlushDbMessages(true);
             
-            if (m_queue.Enqueue(req) && m_options.SynchronousUpload)
+            if (m_queue.Enqueue(req) && (m_options.SynchronousUpload || synchronous))
             {
                 req.WaitForComplete();
                 if (req.Exception != null)
                     throw req.Exception;
             }
             
-            if (req2 != null && m_queue.Enqueue(req2) && m_options.SynchronousUpload)
+            if (req2 != null && m_queue.Enqueue(req2) && (m_options.SynchronousUpload || synchronous))
             {
                 req2.WaitForComplete();
                 if (req2.Exception != null)

@@ -39,7 +39,7 @@ namespace Duplicati.Library.Main.Operation
         public void Run(long samples)
         {
             if (!System.IO.File.Exists(m_options.Dbpath))
-                throw new Exception(string.Format("Database file does not exist: {0}", m_options.Dbpath));
+                throw new UserInformationException(string.Format("Database file does not exist: {0}", m_options.Dbpath));
                                 
             using(var db = new LocalTestDatabase(m_options.Dbpath))
             using(var backend = new BackendManager(m_backendurl, m_options, m_results.BackendWriter, db))
@@ -84,6 +84,33 @@ namespace Duplicati.Library.Main.Operation
                         using(var tf = vol.TempFile)
                             res = TestVolumeInternals(db, vol, tf, m_options, m_results, m_options.FullBlockVerification ? 1.0 : 0.2);
                         m_results.AddResult(res.Key, res.Value);
+
+                        if (!string.IsNullOrWhiteSpace(vol.Hash) && vol.Size > 0)
+                        {
+                            if (res.Value == null || !res.Value.Any())
+                            {
+                                string dbhash;
+                                long dbsize;
+                                RemoteVolumeType dbtype;
+                                RemoteVolumeState dbstate;
+
+                                if (db.GetRemoteVolume(vol.Name, out dbhash, out dbsize, out dbtype, out dbstate))
+                                {
+                                    if (string.IsNullOrWhiteSpace(dbhash) || dbsize <= 0)
+                                    {
+                                        if (m_options.Dryrun)
+                                        {
+                                            m_results.AddDryrunMessage(string.Format("Sucessfully captured hash and size for {0}, would update database", vol.Name));
+                                        }
+                                        else
+                                        {
+                                            m_results.AddMessage(string.Format("Sucessfully captured hash and size for {0}, updating database", vol.Name));
+                                            db.UpdateRemoteVolume(vol.Name, RemoteVolumeState.Verified, vol.Size, vol.Hash);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         
                         db.UpdateVerificationCount(vol.Name);
                     }
@@ -114,9 +141,9 @@ namespace Duplicati.Library.Main.Operation
                         progress++;
                         m_results.OperationProgressUpdater.UpdateProgress((float)progress / files.Count);
 
-                        if (f.Size < 0 || string.IsNullOrWhiteSpace(f.Hash))
+                        if (f.Size <= 0 || string.IsNullOrWhiteSpace(f.Hash))
                         {
-                            m_results.AddMessage(string.Format("No hash recorded for {0}, performing full verification", f.Name));
+                            m_results.AddMessage(string.Format("No hash or size recorded for {0}, performing full verification", f.Name));
                             KeyValuePair<string, IEnumerable<KeyValuePair<TestEntryStatus, string>>> res;
                             string hash;
                             long size;
@@ -124,18 +151,26 @@ namespace Duplicati.Library.Main.Operation
                             using (var tf = backend.GetWithInfo(f.Name, out size, out hash))
                                 res = TestVolumeInternals(db, f, tf, m_options, m_results, 1);
                             m_results.AddResult(res.Key, res.Value);
-                            
-                            if (res.Value != null && !res.Value.Any() && !string.IsNullOrWhiteSpace(hash))
+
+                            if (!string.IsNullOrWhiteSpace(hash) && size > 0)
                             {
-                                if (!m_options.Dryrun)
+                                if (res.Value == null || !res.Value.Any())
                                 {
-                                    m_results.AddMessage(string.Format("Sucessfully captured hash for {0}, updating database", f.Name));
-                                    db.UpdateRemoteVolume(f.Name, RemoteVolumeState.Verified, size, hash);
+                                    if (m_options.Dryrun)
+                                    {
+                                        m_results.AddDryrunMessage(string.Format("Sucessfully captured hash and size for {0}, would update database", f.Name));
+                                    }
+                                    else
+                                    {
+                                        m_results.AddMessage(string.Format("Sucessfully captured hash and size for {0}, updating database", f.Name));
+                                        db.UpdateRemoteVolume(f.Name, RemoteVolumeState.Verified, size, hash);
+                                    }
                                 }
                             }
                         }
                         else
                             backend.GetForTesting(f.Name, f.Size, f.Hash);
+                        
                         db.UpdateVerificationCount(f.Name);
                         m_results.AddResult(f.Name, new KeyValuePair<Duplicati.Library.Interface.TestEntryStatus, string>[0]);
                     }
@@ -166,9 +201,9 @@ namespace Duplicati.Library.Main.Operation
             var blockhasher = System.Security.Cryptography.HashAlgorithm.Create(options.BlockHashAlgorithm);
  
             if (blockhasher == null)
-                throw new Exception(Strings.Common.InvalidHashAlgorithm(options.BlockHashAlgorithm));
+                throw new UserInformationException(Strings.Common.InvalidHashAlgorithm(options.BlockHashAlgorithm));
             if (!blockhasher.CanReuseTransform)
-                throw new Exception(Strings.Common.InvalidCryptoSystem(options.BlockHashAlgorithm));
+                throw new UserInformationException(Strings.Common.InvalidCryptoSystem(options.BlockHashAlgorithm));
                 
             var hashsize = blockhasher.HashSize / 8;
             var parsedInfo = Volumes.VolumeBase.ParseFilename(vol.Name);

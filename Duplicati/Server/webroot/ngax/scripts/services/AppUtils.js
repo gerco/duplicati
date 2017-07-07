@@ -440,7 +440,7 @@ backupApp.service('AppUtils', function($rootScope, $timeout, $cookies, DialogSer
 
         res.querystring.replace(QUERY_REGEXP, function(str, key, val) {
             if (key)
-                res['--' + key] = decodeURIComponent(val);
+                res['--' + key] = decodeURIComponent((val || '').replace(/\+/g, '%20'));
         });
 
         var backends = {};
@@ -603,6 +603,9 @@ backupApp.service('AppUtils', function($rootScope, $timeout, $cookies, DialogSer
             items[n].Category = gettextCatalog.getString('Core options');
 
         function copyToList(lst, key) {
+            if (key != null && typeof(key) != typeof(''))
+                key = null;
+            
             for(var n in lst)
             {
                 if (key == null || key.toLowerCase() == lst[n].Key.toLowerCase())
@@ -626,6 +629,25 @@ backupApp.service('AppUtils', function($rootScope, $timeout, $cookies, DialogSer
             copyToList(sysinfo.BackendModules, backmodule);
 
         return items;
+    };
+
+    this.extractServerModuleOptions = function(advOptionsList, servermodulelist, servermodulesettings, optionlistname) {
+        if (optionlistname == null)
+            optionlistname = 'SupportedCommands';
+
+        for(var mix in servermodulelist) {
+            var mod = servermodulelist[mix];
+            for(var oix in mod[optionlistname]) {
+                var opt = mod[optionlistname][oix];
+                var prefixstr = '--' + opt.Name + '=';
+                for (var i = advOptionsList.length - 1; i >= 0; i--) {
+                    if (advOptionsList[i].indexOf(prefixstr) == 0) {
+                        servermodulesettings[opt.Name] = advOptionsList[i].substr(prefixstr.length);
+                        advOptionsList.splice(i, 1);
+                    }
+                }
+            }
+        }
     };
 
 });

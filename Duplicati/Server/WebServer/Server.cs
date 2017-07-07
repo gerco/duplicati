@@ -172,7 +172,7 @@ namespace Duplicati.Server.WebServer
                     if (!certValid)
                         server.Start(listenInterface, p);
                     else
-                        server.Start(listenInterface, p, cert, System.Security.Authentication.SslProtocols.Tls | System.Security.Authentication.SslProtocols.Tls11 | System.Security.Authentication.SslProtocols.Tls12, null, false);
+                        server.Start(listenInterface, p, cert, System.Security.Authentication.SslProtocols.Tls11 | System.Security.Authentication.SslProtocols.Tls12, null, false);
 
                     m_server = server;
                     m_server.ServerName = string.Format("{0} v{1}", Library.AutoUpdater.AutoUpdateSettings.AppName, System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
@@ -212,9 +212,10 @@ namespace Duplicati.Server.WebServer
         {
             HttpServer.HttpServer server = new HttpServer.HttpServer();
 
-            server.Add(new AuthenticationHandler());
+            if (string.Equals(Environment.GetEnvironmentVariable("SYNO_DSM_AUTH") ?? string.Empty, "1"))
+                server.Add(new SynologyAuthenticationHandler());
 
-            server.Add(new ControlHandler());
+            server.Add(new AuthenticationHandler());
 
             server.Add(new RESTHandler());
 
@@ -289,7 +290,7 @@ namespace Duplicati.Server.WebServer
                 server.Add(proxy_files);
             }
 
-            var fh = new FileModule("/", webroot);
+            var fh = new FileModule("/", webroot, true);
             AddMimeTypes(fh);
             server.Add(fh);
 
